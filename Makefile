@@ -7,7 +7,7 @@ SGX_MODE ?= HW
 # マシンのアーキテクチャ。32bitか64bit
 SGX_ARCH ?= x64
 # Enclaveのデバッグモード。1ならDebug版、0なら製品版
-SGX_DEBUG ?= 0
+SGX_DEBUG ?= 1
 
 
 ## マシンが32bitであればアーキテクチャの変数を更新する
@@ -292,10 +292,25 @@ $(Signature_File): $(Signing_Material)
 	@openssl dgst -sha256 -out $@ -sign Server_Enclave/private_key.pem -keyform PEM $(Signing_Material)
 
 ## Enclave未署名イメージに対しsgx_signで署名を実施
+## RELEASEモードの場合のみ2ステップ署名
+ifeq ($(Build_Mode), HW_RELEASE)
+
 $(Signed_Enclave_Name): $(Enclave_Name) $(Signing_Material) $(Signature_File) $(Signing_Pubkey)
-#	@$(SGX_ENCLAVE_SIGNER) sign -key Server_Enclave/private_key.pem -enclave $(Enclave_Name) -out $@ -config $(Enclave_Config_File)
-	@$(SGX_ENCLAVE_SIGNER) catsig -enclave $(Enclave_Name) -config $(Enclave_Config_File) -out $@ -key $(Signing_Pubkey) -sig $(Signature_File) -unsigned $(Signing_Material)
-	@echo "SIGN =>  $@"
+	@$(SGX_ENCLAVE_SIGNER) catsig -enclave $(Enclave_Name) \
+		-config $(Enclave_Config_File) -out $@ \
+		-key $(Signing_Pubkey) -sig $(Signature_File) -unsigned $(Signing_Material)
+	@echo "SIGN (two-step) =>  $@"
+
+## その他の場合はシングルステップ署名
+else
+
+$(Signed_Enclave_Name): $(Enclave_Name)
+	@$(SGX_ENCLAVE_SIGNER) sign -key Server_Enclave/private_key.pem \
+		-enclave $(Enclave_Name) -out $@ -config $(Enclave_Config_File)
+	@echo "SIGN (single-step) =>  $@"
+
+endif
+
 
 ## クリーンアップ用サブコマンドの定義
 .PHONY: clean

@@ -10,6 +10,8 @@
 #include <string>
 #include <algorithm>
 #include <string.h>
+#include <sstream>
+#include <time.h>
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "../include/httplib.h"
@@ -155,6 +157,19 @@ uint64_t read_uint_from_bin(const uint8_t *p, size_t nbytes)
     }
 
     return v;
+}
+
+
+/* time_tからstringに変換する補助関数 */
+std::string time_to_string(time_t t)
+{
+    std::tm* tm_ptr = std::localtime(&t);
+    if(!tm_ptr) return "";
+
+    std::stringstream ss;
+    ss << std::put_time(tm_ptr, "%Y/%m/%d %H:%M:%S");
+
+    return ss.str();
 }
 
 
@@ -690,8 +705,8 @@ bool check_range(size_t offset, size_t length, size_t total_size)
 }
 
 
-/* Quote及び補足情報の内容を確認し、受理するかを判定する */
-int appraise_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
+/* Quote及び補足情報の内容を表示する */
+int display_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
     sgx_ql_qv_result_t quote_verification_result, 
     uint32_t collateral_expiration_status,
     tee_supp_data_descriptor_t supp_data)
@@ -739,6 +754,14 @@ int appraise_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
     print_debug_binary("MRENCLAVE", quote + 112, 32, DEBUG_LOG);
     print_debug_binary("MRSIGNER", quote + 176, 32, DEBUG_LOG);
     print_debug_binary("Config ID", quote + 240, 64, DEBUG_LOG);
+
+    print_debug_message("Is the Enclave in Debug Mode? ->", DEBUG_LOG);
+    uint64_t attr_flags;
+    memcpy(&attr_flags, quote + 96, sizeof(uint64_t));
+
+    if((attr_flags & 0x02) != 0) print_debug_message("true", DEBUG_LOG);
+    else print_debug_message("false", DEBUG_LOG);
+    print_debug_message("", DEBUG_LOG);
 
     print_debug_message("ISV Product ID ->", DEBUG_LOG);
     print_debug_message(std::to_string(read_uint_from_bin(quote + 304, 2)), DEBUG_LOG);
@@ -860,7 +883,172 @@ int appraise_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
             + std::string(".") + std::to_string(p->minor_version);
         print_debug_message("Supplemental Data version (<major>.<minor>) ->", DEBUG_LOG);
         print_debug_message(supp_ver, DEBUG_LOG);
-        print_debug_message("", DEBUG_LOG);        
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Earliest issue date of all the collateral ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->earliest_issue_date), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Latest issue date of all the collateral ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->latest_issue_date), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Earliest expiration date of all the collateral ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->earliest_expiration_date), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("TCB level date tag", DEBUG_LOG);
+        print_debug_message("(meaning that it is not vulnerable to security advisories ", DEBUG_LOG);
+        print_debug_message("affecting the SGX TCB published by this date) ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->tcb_level_date_tag), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("CRL number of PCK CRK ->", DEBUG_LOG);
+        print_debug_message(std::to_string(p->pck_crl_num), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("CRL number of Root CA CRL ->", DEBUG_LOG);
+        print_debug_message(std::to_string(p->root_ca_crl_num), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("The lower of the TCB evaluation dataset number among TCB Info and QE Identity ->", DEBUG_LOG);
+        print_debug_message(std::to_string(p->tcb_eval_ref_num), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_binary("Root key ID (SHA-384 hash of root CA's public key)",
+            p->root_key_id, ROOT_KEY_ID_SIZE, DEBUG_LOG);
+
+        print_debug_binary("PCK PPID", p->pck_ppid, 16, DEBUG_LOG);
+
+        print_debug_binary("TCBSVN (CPUSVN)", p->tcb_cpusvn.svn, 16, DEBUG_LOG);
+
+        print_debug_message("PCESVN ->", DEBUG_LOG);
+        print_debug_message(std::to_string(p->tcb_pce_isvsvn), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("PCEID ->", DEBUG_LOG);
+        print_debug_message(std::to_string(p->pce_id), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("TEE Type ->", DEBUG_LOG);
+        
+        if(p->tee_type == 0x00)
+        {
+            print_debug_message("0x00 (meaning Intel SGX)", DEBUG_LOG);
+        }
+        else if(p->tee_type == 0x81)
+        {
+            print_debug_message("0x81 (meaning Intel TDX)", DEBUG_LOG);
+        }
+        else
+        {
+            std::stringstream ss;
+            ss << "Unknown TEE type: 0x"
+                << std::hex << std::uppercase << p->tee_type;
+            print_debug_message(ss.str(), DEBUG_LOG);
+        }
+
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("SGX type ->", DEBUG_LOG);
+
+        if(p->sgx_type == 0)
+        {
+            print_debug_message("Legacy-SGX", DEBUG_LOG);
+        }
+        else if(p->sgx_type == 1)
+        {
+            print_debug_message("Scalable-SGX", DEBUG_LOG);
+        }
+        else if(p->sgx_type == 2)
+        {
+            print_debug_message("Scalable-SGX with SW-based Cryptographic Integrity (Ci)", DEBUG_LOG);
+        }
+        else
+        {
+            std::stringstream ss;
+            ss << "Unknown SGX type: 0x"
+                << std::hex << std::uppercase << p->sgx_type;
+            print_debug_message(ss.str(), DEBUG_LOG);
+        }
+
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_binary("Platform instance ID", 
+            p->platform_instance_id, PLATFORM_INSTANCE_ID_SIZE, DEBUG_LOG);
+        
+        print_debug_message("Is dynamic platform?", DEBUG_LOG);
+        print_debug_message("(Indicate whether a platform can be extended with additional packages", DEBUG_LOG);
+        print_debug_message(" via Package Add calls to SGX Registration Backend) ->", DEBUG_LOG);
+        
+        if(p->dynamic_platform == PCK_FLAG_FALSE) print_debug_message("false", DEBUG_LOG);
+        else if(p->dynamic_platform == PCK_FLAG_TRUE) print_debug_message("true", DEBUG_LOG);
+        else
+        {
+            std::stringstream ss;
+            ss << "undefined or unknown flag: 0x"
+                << std::hex << std::uppercase << p->dynamic_platform;
+            print_debug_message(ss.str(), DEBUG_LOG);
+        }
+        
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Is platform root keys cached by SGX Registration Backend? ->", DEBUG_LOG);
+
+        if(p->cached_keys == PCK_FLAG_FALSE) print_debug_message("false", DEBUG_LOG);
+        else if(p->cached_keys == PCK_FLAG_TRUE) print_debug_message("true", DEBUG_LOG);
+        else
+        {
+            std::stringstream ss;
+            ss << "undefined or unknown flag: 0x"
+                << std::hex << std::uppercase << p->cached_keys;
+            print_debug_message(ss.str(), DEBUG_LOG);
+        }
+
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Is SMT (hyperthreading) enabled? ->", DEBUG_LOG);
+        
+        if(p->smt_enabled == PCK_FLAG_FALSE) print_debug_message("false", DEBUG_LOG);
+        else if(p->smt_enabled == PCK_FLAG_TRUE) print_debug_message("true", DEBUG_LOG);
+        else
+        {
+            std::stringstream ss;
+            ss << "undefined or unknown flag: 0x"
+                << std::hex << std::uppercase << p->smt_enabled;
+            print_debug_message(ss.str(), DEBUG_LOG);
+        }
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("List of Security Advisory IDs ->", DEBUG_LOG);
+
+        if(strlen(p->sa_list) == 0) print_debug_message("none", DEBUG_LOG);
+        else print_debug_message(std::string(p->sa_list), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Earliest issue date of QE Identity ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->qe_iden_earliest_issue_date), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Latest issue date of QE Identity ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->qe_iden_latest_issue_date), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("Earliest expiration date of QE Identity ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->qe_iden_earliest_expiration_date), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("TCB level date tag of QE Identity ->", DEBUG_LOG);
+        print_debug_message(time_to_string(p->qe_iden_tcb_level_date_tag), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("TCB evaluation dataset number of QE Identity ->", DEBUG_LOG);
+        print_debug_message(std::to_string(p->qe_iden_tcb_eval_ref_num), DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        print_debug_message("QE Identity status ->", DEBUG_LOG);
+        print_ql_qv_result(p->qe_iden_status);
+
     }
     else
     {
@@ -1252,7 +1440,9 @@ int do_RA(std::string server_url,
     /* QvLによりQuoteの検証を実施する */
     sgx_ql_qv_result_t quote_verification_result = TEE_QV_RESULT_UNSPECIFIED; 
     uint32_t collateral_expiration_status = 1;
+
     tee_supp_data_descriptor_t supp_data;
+    memset(&supp_data, 0, sizeof(tee_supp_data_descriptor_t));
 
     ret = verify_quote(quote_u8, quote_size, quote_verification_result,
         collateral_expiration_status, supp_data);
@@ -1265,18 +1455,20 @@ int do_RA(std::string server_url,
 
     
     /* Quote及び補足情報の内容を確認し、受理するかを判定する */
-    ret = appraise_quote_and_supplemental_data(quote_u8, quote_size, 
+    ret = display_quote_and_supplemental_data(quote_u8, quote_size, 
         quote_verification_result, collateral_expiration_status, supp_data);
 
-    if(supp_data.p_data != NULL) free(supp_data.p_data);
+    if(ret < 0) return -1;
 
-    print_debug_message("RETURN FOR TEST", WARN);
     return 0;
 
-    /* RA reportの各種検証処理を実施しRAの受理判断を行う */
+    /* Quoteや補足情報の中身について各種検証処理を実施しRAの受理判断を行う */
     bool ra_result = 1; //RA Accepted
-    //ret = process_ra_report(ra_report_jwt, quote_json, ra_keys);
+    // ret = appraise_quote_and_supplemental_data(quote_u8, quote_size, 
+    //     quote_verification_result, collateral_expiration_status, supp_data);
     if(ret) ra_result = 0; //RA failed
+
+    if(supp_data.p_data != NULL) free(supp_data.p_data);
 
     /* RA受理判断結果の返信 */
     ret = send_ra_result(server_url, ra_ctx_b64, ra_result);
