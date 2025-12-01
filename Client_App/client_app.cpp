@@ -52,6 +52,22 @@ typedef struct client_settings_struct
     std::string req_mrenclave;
     std::string req_mrsigner;
     bool skip_mrenclave_check;
+    bool allow_sw_hardening_needed;
+    bool allow_config_needed;
+    bool allow_out_of_date;
+    bool allow_debug;
+    bool allow_collateral_expiration;
+    std::string allowed_sa_list;
+    uint32_t min_tcb_eval_ds_num;
+    std::string req_isv_ext_prod_id;
+    std::string req_isv_family_id;
+    std::string req_config_id;
+    uint16_t min_config_svn;
+    uint16_t min_qe_svn;
+    uint16_t min_pce_svn;
+    std::string req_qe_prod_id;
+    std::string req_qe_mrenclave;
+    std::string req_qe_mrsigner;
 } settings_t;
 
 settings_t g_settings;
@@ -113,6 +129,63 @@ std::string load_from_ini(std::string section, std::string key)
 }
 
 
+/* 0/1値の読み取りを行いbool値に変換する補助関数 */
+bool load_binary_value_to_bool(std::string section, std::string field, std::string flag_name)
+{
+    uint32_t flag_tmp = 0;
+
+    try
+    {
+        flag_tmp = std::stoi(load_from_ini(section, field));
+    }
+    catch(...)
+    {
+        print_debug_message(
+            "Invalid setting. Probably non-integer value was set illegally.", ERROR);
+        print_debug_message("", ERROR);
+
+        exit(1);
+    }
+
+    if(!(flag_tmp == 0 || flag_tmp == 1))
+    {
+        std::string message = flag_name + std::string(" must be 0 or 1.");
+        print_debug_message("", ERROR);
+
+        exit(1);
+    }
+
+    if(flag_tmp == 0) return false;
+
+    return true;
+}
+
+
+/* 指定が任意な値のロードを行う補助関数 */
+std::string load_optional_value(std::string section, std::string field, bool is_int)
+{
+    std::string tmp_str = load_from_ini(section, field);
+
+    if((is_int == true) && tmp_str != std::string("none"))
+    {
+        try
+        {
+            uint32_t int_tmp = std::stoi(tmp_str);
+        }
+        catch(...)
+        {
+            print_debug_message(
+                "Invalid setting. Probably non-integer value was set illegally.", ERROR);
+            print_debug_message("", ERROR);
+
+            exit(1);
+        }
+    }
+
+    return tmp_str;
+}
+
+
 /* 設定情報の読み込み */
 void load_settings()
 {
@@ -123,6 +196,10 @@ void load_settings()
         g_settings.req_isv_prod_id = std::stoi(load_from_ini("client", "REQUIRED_ISV_PROD_ID"));
         g_settings.req_mrenclave = load_from_ini("client", "REQUIRED_MRENCLAVE");
         g_settings.req_mrsigner = load_from_ini("client", "REQUIRED_MRSIGNER");
+        g_settings.min_tcb_eval_ds_num = std::stoi(load_from_ini("client", "MINIMUM_TCB_EVAL_DATASET_NUM"));
+        g_settings.min_config_svn = std::stoi(load_from_ini("client", "MINIMUM_CONFIG_SVN"));
+        g_settings.min_pce_svn = std::stoi(load_from_ini("client", "MINIMUM_PCE_SVN"));
+        g_settings.min_qe_svn = std::stoi(load_from_ini("client", "MINIMUM_QE_SVN"));
     }
     catch(...)
     {
@@ -133,18 +210,29 @@ void load_settings()
         exit(1);
     }
     
-    uint32_t skip_flag = std::stoi(load_from_ini("client", "SKIP_MRENCLAVE_CHECK"));
+    g_settings.skip_mrenclave_check 
+        = load_binary_value_to_bool("client", "SKIP_MRENCLAVE_CHECK", "Skip MRENCLAVE check flag");
+    g_settings.allow_sw_hardening_needed
+        = load_binary_value_to_bool("client", "ALLOW_SW_HARDENING_NEEDED", "SW_HARDENING_NEEDED allowing flag");
+    g_settings.allow_config_needed
+        = load_binary_value_to_bool("client", "ALLOW_CONFIGURATION_NEEDED", "CONFIGURATION_NEEDED allowing flag");
+    g_settings.allow_out_of_date
+        = load_binary_value_to_bool("client", "ALLOW_OUT_OF_DATE", "OUT_OF_DATE allowing flag");
+    g_settings.allow_debug
+        = load_binary_value_to_bool("client", "ALLOW_DEBUG_ENCLAVE", "Debug Enclave allowing flag");
+    g_settings.allow_collateral_expiration
+        = load_binary_value_to_bool("client", "ALLOW_COLLATERAL_EXPIRATION", "Collateral expiration allowing flag");
 
-    if(!(skip_flag == 0 || skip_flag == 1))
-    {
-        print_debug_message("MRENCLAVE check skip flag must be 0 or 1.", ERROR);
-        print_debug_message("", ERROR);
+    g_settings.allowed_sa_list = load_from_ini("client", "ALLOWED_SA_LIST");
 
-        exit(1);
-    }
-
-    g_settings.skip_mrenclave_check = skip_flag;
+    g_settings.req_isv_ext_prod_id = load_optional_value("client", "REQUIRED_ISV_EXT_PROD_ID", false);
+    g_settings.req_isv_family_id = load_optional_value("client", "REQUIRED_ISV_FAMILY_ID", false);
+    g_settings.req_config_id = load_optional_value("client", "REQUIRED_CONFIG_ID", false);
+    g_settings.req_qe_prod_id = load_optional_value("client", "REQUIRED_QE_PROD_ID", true);
+    g_settings.req_qe_mrenclave = load_optional_value("client", "REQUIRED_QE_MRENCLAVE", false);
+    g_settings.req_qe_mrsigner = load_optional_value("client", "REQUIRED_QE_MRSIGNER", false);
 }
+
 
 /* Quote等の整数メンバ表示用関数 */
 uint64_t read_uint_from_bin(const uint8_t *p, size_t nbytes)
@@ -868,6 +956,9 @@ int display_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
 
     print_debug_binary("QE3 ISV Family ID", quote + 868, 16, DEBUG_LOG);
     print_debug_binary("QE3 Report Data", quote + 884, 64, DEBUG_LOG);
+    
+    print_debug_message("[QE3 Report (AK Cert) Signature]", DEBUG_LOG);
+    print_debug_binary("QE3 Report Signature", quote + 948, 64, DEBUG_LOG);
 
     print_debug_message("[Supplemental Data]", DEBUG_LOG);
     print_debug_message("Supplemental Data major version ->", DEBUG_LOG);
@@ -1064,6 +1155,87 @@ int display_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
 }
 
 
+/* Attester Enclaveの各種同一性の検証を行う */
+bool appraise_quote_and_supplemental_data(uint8_t *quote_u8, size_t quote_size, 
+            sgx_ql_qv_result_t quote_verification_result, 
+            uint32_t collateral_expiration_status,
+            tee_supp_data_descriptor_t supp_data)
+{
+    print_debug_message("==============================================", INFO);
+    print_debug_message("Verify Enclave identity", INFO);
+    print_debug_message("==============================================", INFO);
+    print_debug_message("", INFO);
+
+    /* 境界外参照の抑止 */
+    if(1012 > quote_size) //QE3 Report Signatureまでのサイズ
+    {
+        print_debug_message("Corrupted Quote structure.", ERROR);
+        print_debug_message("", ERROR);
+
+        return false;
+    }
+
+    bool is_ra_trusted = true;    
+    
+    uint8_t *quote_mrenclave = new uint8_t[32]();
+    uint8_t *quote_mrsigner = new uint8_t[32]();
+    uint16_t quote_isvprodid = 0;
+    uint16_t quote_isvsvn = 0;
+    uint8_t *quote_upper_data = new uint8_t[32]();
+    uint8_t *quote_isv_ext_prod_id = new uint8_t[16]();
+    uint8_t *quote_isv_family_id = new uint8_t[16]();
+    uint8_t *quote_config_id = new uint8_t[64]();
+    uint16_t quote_config_svn = 0;
+    uint16_t quote_pce_svn = 0;
+    uint16_t quote_qe_svn = 0;
+    uint16_t quote_qe_prod_id = 0;
+    uint8_t *quote_qe_mrenclave = new uint8_t[32]();
+    uint8_t *quote_qe_mrsigner = new uint8_t[32]();
+
+    try
+    {
+        //112はsgx_quote3_t内のReport Body内MRENCLAVEまでのオフセット
+        memcpy(quote_mrenclave, quote + 112, 32);
+        memcpy(quote_mrsigner, quote + 176, 32);
+        memcpy(&quote_isvprodid, quote + 304, 2);
+        memcpy(&quote_isvsvn, quote + 306, 2);
+        memcpy(quote_upper_data, quote + 368, 32);
+
+        /* MRENCLAVEのチェック */
+        if(g_settings.skip_mrenclave_check == false)
+        {
+            std::string q_mrenclave_hex = std::string(to_hexstring(quote_mrenclave, 32));
+
+            print_debug_message("Required MRENCLAVE ->", DEBUG_LOG);
+            print_debug_message(g_settings.req_mrenclave, DEBUG_LOG);
+            print_debug_message("MRENCLAVE from Quote ->", DEBUG_LOG);
+            print_debug_message(q_mrenclave_hex, DEBUG_LOG);
+            
+            //要求値とQuote内の要素との比較
+            if(g_settings.req_mrenclave != q_mrenclave_hex)
+            {
+                print_debug_message("", ERROR);
+                print_debug_message("MRENCLAVE mismatched. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                is_ra_trusted = false;
+
+                throw std::exception();
+            }
+
+            print_debug_message("MRENCLAVE matched.", INFO);
+            print_debug_message("", INFO);
+        }
+    }
+    catch(...)
+    {
+        //確保したヒープの解放
+    }
+
+    return is_ra_trusted;
+}
+
+
 /* サーバEnclaveの各種同一性の検証を行う */
 int verify_enclave(std::string ra_report_jwt, 
     std::string quote_json, ra_session_t ra_keys)
@@ -1097,12 +1269,6 @@ int verify_enclave(std::string ra_report_jwt,
     uint8_t *qe3_quote = base64url_decode<uint8_t, char>(
         (char*)quote_json_obj["quote"].ToString().c_str(), quote_size);
 
-    uint8_t *quote_mrenclave = new uint8_t[32]();
-    uint8_t *quote_mrsigner = new uint8_t[32]();
-    uint16_t quote_isvprodid = 0;
-    uint16_t quote_isvsvn = 0;
-    uint8_t *quote_upper_data = new uint8_t[32]();
-
     /* 境界外参照の抑止 */
     if(368 + 32 > quote_size)
     {
@@ -1111,6 +1277,12 @@ int verify_enclave(std::string ra_report_jwt,
 
         return -1;
     }
+
+    uint8_t *quote_mrenclave = new uint8_t[32]();
+    uint8_t *quote_mrsigner = new uint8_t[32]();
+    uint16_t quote_isvprodid = 0;
+    uint16_t quote_isvsvn = 0;
+    uint8_t *quote_upper_data = new uint8_t[32]();
 
     //112はsgx_quote3_t内のsgx_report_data_t内までのオフセット。以下同様
     memcpy(quote_mrenclave, qe3_quote + 112, 32);
@@ -1458,14 +1630,10 @@ int do_RA(std::string server_url,
     ret = display_quote_and_supplemental_data(quote_u8, quote_size, 
         quote_verification_result, collateral_expiration_status, supp_data);
 
-    if(ret < 0) return -1;
-
-    return 0;
-
     /* Quoteや補足情報の中身について各種検証処理を実施しRAの受理判断を行う */
     bool ra_result = 1; //RA Accepted
-    // ret = appraise_quote_and_supplemental_data(quote_u8, quote_size, 
-    //     quote_verification_result, collateral_expiration_status, supp_data);
+    ra_result = appraise_quote_and_supplemental_data(quote_u8, quote_size, 
+            quote_verification_result, collateral_expiration_status, supp_data);
     if(ret) ra_result = 0; //RA failed
 
     if(supp_data.p_data != NULL) free(supp_data.p_data);
