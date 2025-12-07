@@ -7,7 +7,7 @@ SGX_MODE ?= HW
 # マシンのアーキテクチャ。32bitか64bit
 SGX_ARCH ?= x64
 # Enclaveのデバッグモード。1ならDebug版、0なら製品版
-SGX_DEBUG ?= 1
+SGX_DEBUG ?= 0
 
 
 ## マシンが32bitであればアーキテクチャの変数を更新する

@@ -12,6 +12,8 @@
 #include <string.h>
 #include <sstream>
 #include <time.h>
+#include <unordered_set>
+#include <ctype.h>
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "../include/httplib.h"
@@ -57,6 +59,7 @@ typedef struct client_settings_struct
     bool allow_out_of_date;
     bool allow_debug;
     bool allow_collateral_expiration;
+    bool allow_smt_enabled;
     std::string allowed_sa_list;
     uint32_t min_tcb_eval_ds_num;
     std::string req_isv_ext_prod_id;
@@ -222,6 +225,8 @@ void load_settings()
         = load_binary_value_to_bool("client", "ALLOW_DEBUG_ENCLAVE", "Debug Enclave allowing flag");
     g_settings.allow_collateral_expiration
         = load_binary_value_to_bool("client", "ALLOW_COLLATERAL_EXPIRATION", "Collateral expiration allowing flag");
+    g_settings.allow_smt_enabled
+        = load_binary_value_to_bool("client", "ALLOW_SMT_ENABLED", "SMT Enabled allowing flag");
 
     g_settings.allowed_sa_list = load_from_ini("client", "ALLOWED_SA_LIST");
 
@@ -1155,11 +1160,47 @@ int display_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
 }
 
 
+static std::string trim(const std::string& s)
+{
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])))
+    {
+        ++start;
+    }
+
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])))
+    {
+        --end;
+    }
+
+    return s.substr(start, end - start);
+}
+
+// コンマ区切りの文字列をセットへ
+static std::unordered_set<std::string> split_to_set(const std::string& csv)
+{
+    std::unordered_set<std::string> result;
+    std::stringstream ss(csv);
+    std::string item;
+
+    while (std::getline(ss, item, ','))
+    {
+        item = trim(item);
+        if (!item.empty())
+        {
+            result.insert(item);
+        }
+    }
+    return result;
+}
+
+
 /* Attester Enclaveの各種同一性の検証を行う */
-bool appraise_quote_and_supplemental_data(uint8_t *quote_u8, size_t quote_size, 
+bool appraise_quote_and_supplemental_data(uint8_t *quote, size_t quote_size, 
             sgx_ql_qv_result_t quote_verification_result, 
             uint32_t collateral_expiration_status,
-            tee_supp_data_descriptor_t supp_data)
+            tee_supp_data_descriptor_t supp_data, ra_session_t ra_keys)
 {
     print_debug_message("==============================================", INFO);
     print_debug_message("Verify Enclave identity", INFO);
@@ -1175,12 +1216,13 @@ bool appraise_quote_and_supplemental_data(uint8_t *quote_u8, size_t quote_size,
         return false;
     }
 
-    bool is_ra_trusted = true;    
+    bool is_ra_trusted = false;    
     
     uint8_t *quote_mrenclave = new uint8_t[32]();
     uint8_t *quote_mrsigner = new uint8_t[32]();
     uint16_t quote_isvprodid = 0;
     uint16_t quote_isvsvn = 0;
+    uint64_t quote_attr_flags = 0;
     uint8_t *quote_upper_data = new uint8_t[32]();
     uint8_t *quote_isv_ext_prod_id = new uint8_t[16]();
     uint8_t *quote_isv_family_id = new uint8_t[16]();
@@ -1192,6 +1234,14 @@ bool appraise_quote_and_supplemental_data(uint8_t *quote_u8, size_t quote_size,
     uint8_t *quote_qe_mrenclave = new uint8_t[32]();
     uint8_t *quote_qe_mrsigner = new uint8_t[32]();
 
+    bool supp_smt_enabled = false;
+    std::string supp_sa_list = "";
+    uint32_t supp_tcb_eval_ds_num = 0;
+    
+    uint8_t *ga_gb_vk = new uint8_t[144]();
+
+    sgx_ql_qv_supplemental_t *supp_p = (sgx_ql_qv_supplemental_t*)supp_data.p_data;
+
     try
     {
         //112はsgx_quote3_t内のReport Body内MRENCLAVEまでのオフセット
@@ -1199,7 +1249,15 @@ bool appraise_quote_and_supplemental_data(uint8_t *quote_u8, size_t quote_size,
         memcpy(quote_mrsigner, quote + 176, 32);
         memcpy(&quote_isvprodid, quote + 304, 2);
         memcpy(&quote_isvsvn, quote + 306, 2);
+        memcpy(&quote_attr_flags, quote + 96, sizeof(uint64_t));
         memcpy(quote_upper_data, quote + 368, 32);
+        memcpy(&quote_config_svn, quote + 308, 2);
+        memcpy(&quote_qe_svn, quote + 8, 2);
+        memcpy(&quote_pce_svn, quote + 10, 2);
+
+        supp_smt_enabled = supp_p->smt_enabled;
+        supp_sa_list = std::string(supp_p->sa_list);
+        supp_tcb_eval_ds_num = supp_p->tcb_eval_ref_num;
 
         /* MRENCLAVEのチェック */
         if(g_settings.skip_mrenclave_check == false)
@@ -1226,287 +1284,529 @@ bool appraise_quote_and_supplemental_data(uint8_t *quote_u8, size_t quote_size,
             print_debug_message("MRENCLAVE matched.", INFO);
             print_debug_message("", INFO);
         }
+
+        /* MRSIGNERのチェック */
+        std::string q_mrsigner_hex = std::string(to_hexstring(quote_mrsigner, 32));
+
+        print_debug_message("Required MRSIGNER ->", DEBUG_LOG);
+        print_debug_message(g_settings.req_mrsigner, DEBUG_LOG);
+        print_debug_message("MRSIGNER from Quote ->", DEBUG_LOG);
+        print_debug_message(q_mrsigner_hex, DEBUG_LOG);
+
+        if(g_settings.req_mrsigner != q_mrsigner_hex)
+        {
+            print_debug_message("", ERROR);
+            print_debug_message("MRSIGNER mismatched. Reject RA.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        print_debug_message("MRSIGNER matched.", INFO);
+        print_debug_message("", INFO);
+
+        /* ISVSVNのチェック */
+        print_debug_message("Required ISVSVN ->", DEBUG_LOG);
+        print_debug_message(std::to_string(g_settings.min_isv_svn), DEBUG_LOG);
+        print_debug_message("ISVSVN from Quote ->", DEBUG_LOG);
+        print_debug_message(std::to_string(quote_isvsvn), DEBUG_LOG);
+
+        if(g_settings.min_isv_svn > quote_isvsvn)
+        {
+            print_debug_message("", ERROR);
+            print_debug_message("Insufficient ISVSVN. Reject RA.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        print_debug_message("ISVSVN validated.", INFO);
+        print_debug_message("", INFO);
+
+        /* ISV ProdIDのチェック */
+        print_debug_message("Required ISV ProdID ->", DEBUG_LOG);
+        print_debug_message(std::to_string(g_settings.req_isv_prod_id), DEBUG_LOG);
+        print_debug_message("ISV ProdID from Quote ->", DEBUG_LOG);
+        print_debug_message(std::to_string(quote_isvsvn), DEBUG_LOG);
+
+        if(g_settings.req_isv_prod_id != quote_isvprodid)
+        {
+            print_debug_message("", ERROR);
+            print_debug_message("ISV ProdID mismatched. Reject RA.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        print_debug_message("ISV ProdID matched.", INFO);
+        print_debug_message("", INFO);
+
+        /* RAステータスのチェック */
+        if(quote_verification_result == TEE_QV_RESULT_CONFIG_NEEDED
+            || quote_verification_result == TEE_QV_RESULT_OUT_OF_DATE_CONFIG_NEEDED
+            || quote_verification_result == TEE_QV_RESULT_CONFIG_AND_SW_HARDENING_NEEDED)
+        {
+            if(g_settings.allow_config_needed == true)
+            {
+                print_debug_message("The RA status includes CONFIGURATION_NEEDED, ", WARN);
+                print_debug_message("allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+            else
+            {
+                print_debug_message("The RA status includes CONFIGURATION_NEEDED, ", ERROR);
+                print_debug_message("disallowed by user's policy. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        if(quote_verification_result == TEE_QV_RESULT_SW_HARDENING_NEEDED
+            || quote_verification_result == TEE_QV_RESULT_CONFIG_AND_SW_HARDENING_NEEDED)
+        {
+            if(g_settings.allow_sw_hardening_needed == true)
+            {
+                print_debug_message("The RA status includes SW_HARDENING_NEEDED, ", WARN);
+                print_debug_message("allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+            else
+            {
+                print_debug_message("The RA status includes SW_HARDENING_NEEDED, ", ERROR);
+                print_debug_message("disallowed by user's policy. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        if(quote_verification_result == TEE_QV_RESULT_OUT_OF_DATE
+            || quote_verification_result == TEE_QV_RESULT_OUT_OF_DATE_CONFIG_NEEDED)
+        {
+            if(g_settings.allow_out_of_date == true)
+            {
+                print_debug_message("The RA status includes OUT_OF_DATE, ", WARN);
+                print_debug_message("allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+            else
+            {
+                print_debug_message("The RA status includes OUT_OF_DATE, ", ERROR);
+                print_debug_message("disallowed by user's policy. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* DebugモードEnclaveであるかのチェック */
+        if((quote_attr_flags & 0x02) != 0)
+        {
+            if(g_settings.allow_debug == true)
+            {
+                print_debug_message("The Enclave is run in Debug mode, ", WARN);
+                print_debug_message("allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+            else
+            {
+                print_debug_message("The Enclave is run in Debug mode, ", ERROR);
+                print_debug_message("disallowed by user's policy. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+        else
+        {
+            print_debug_message("The Enclave is run in Production mode.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+
+        /* コラテラルの期限切れのチェック */
+        if(collateral_expiration_status)
+        {
+            if(g_settings.allow_collateral_expiration == true)
+            {
+                print_debug_message("One or more collaterals have expired, ", WARN);
+                print_debug_message("allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+            else
+            {
+                print_debug_message("One or more collaterals have expired, ", ERROR);
+                print_debug_message("disallowed by user's policy. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* ハイパースレッド有効化状況のチェック */
+        if(supp_smt_enabled == true)
+        {
+            if(g_settings.allow_smt_enabled == true)
+            {
+                print_debug_message("SMT is enabled in attester's machine, ", WARN);
+                print_debug_message("allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+            else
+            {
+                print_debug_message("SMT is enabled in attester's machine, ", ERROR);
+                print_debug_message("disallowed by user's policy. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+        else
+        {
+            print_debug_message("SMT is disabled in attester's machine.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+
+        /* 脆弱性セキュリティアドバイザリ（SA）リストのチェック */
+        print_debug_message("Reported Security Advisory(SA) list ->", DEBUG_LOG);
+        if(supp_sa_list.length() <= 0)
+        {
+            print_debug_message("none", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+        else
+        {
+            print_debug_message(supp_sa_list, DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+            
+            if(g_settings.allowed_sa_list == "ALL")
+            {
+                print_debug_message("Any of SA is allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+            else if(g_settings.allowed_sa_list.length() <= 0)
+            {
+                print_debug_message("Any of SA is disallowed by user's policy. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+            else
+            {
+                std::unordered_set<std::string> allowed = split_to_set(g_settings.allowed_sa_list);
+                std::unordered_set<std::string> supp_set = split_to_set(supp_sa_list);
+
+                for (std::unordered_set<std::string>::const_iterator it = supp_set.begin();
+                    it != supp_set.end(); ++it)
+                {
+                    if (allowed.find(*it) == allowed.end())
+                    {
+                        print_debug_message("SA disallowed by user's policy is detected. Reject RA.", ERROR);
+                        print_debug_message("", ERROR);
+
+                        throw std::exception();
+                    }
+                }
+                
+                print_debug_message("All of reported SAs are allowed by user's policy.", WARN);
+                print_debug_message("", WARN);
+            }
+        }
+
+        /* TCB Evaluation Dataset Numberのチェック */
+        print_debug_message("Required TCB evaluation dataset number ->", DEBUG_LOG);
+        print_debug_message(std::to_string(g_settings.min_tcb_eval_ds_num), DEBUG_LOG);
+        print_debug_message("TCB evaluation dataset number from Supplemental Data ->", DEBUG_LOG);
+        print_debug_message(std::to_string(supp_tcb_eval_ds_num), DEBUG_LOG);
+
+        if(supp_tcb_eval_ds_num < g_settings.min_tcb_eval_ds_num)
+        {
+            print_debug_message("Insufficient TCB evaluation dataset number. Reject RA.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        print_debug_message("TCB evaluation dataset number validated.", DEBUG_LOG);
+        print_debug_message("", DEBUG_LOG);
+
+        /* ISV拡張ProdIDのチェック */
+        if(g_settings.req_isv_ext_prod_id == "none")
+        {
+            print_debug_message("Skip ISV Extended Product ID check.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+        else
+        {
+            memcpy(quote_isv_ext_prod_id, quote + 80, 16);
+            std::string q_isv_ext_prod_id_hex = std::string(to_hexstring(quote_isv_ext_prod_id, 16));
+
+            print_debug_message("Required ISV Extended Product ID ->", DEBUG_LOG);
+            print_debug_message(g_settings.req_isv_ext_prod_id, DEBUG_LOG);
+            print_debug_message("ISV Extended Product ID from Quote ->", DEBUG_LOG);
+            print_debug_message(q_isv_ext_prod_id_hex, DEBUG_LOG);
+
+            if(g_settings.req_isv_ext_prod_id == q_isv_ext_prod_id_hex)
+            {
+                print_debug_message("ISV Extended Product ID matched.", DEBUG_LOG);
+                print_debug_message("", DEBUG_LOG);
+            }
+            else
+            {
+                print_debug_message("ISV Extended Product ID mismatched. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* ISV Family IDのチェック */
+        if(g_settings.req_isv_family_id == "none")
+        {
+            print_debug_message("Skip ISV Family ID check.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+        else
+        {
+            memcpy(quote_isv_family_id, quote + 352, 16);
+            std::string q_isv_family_id_hex = std::string(to_hexstring(quote_isv_family_id, 16));
+
+            print_debug_message("Required ISV Family ID ->", DEBUG_LOG);
+            print_debug_message(g_settings.req_isv_family_id, DEBUG_LOG);
+            print_debug_message("ISV Family ID from Quote ->", DEBUG_LOG);
+            print_debug_message(q_isv_family_id_hex, DEBUG_LOG);
+
+            if(g_settings.req_isv_family_id == q_isv_family_id_hex)
+            {
+                print_debug_message("ISV Family ID matched.", DEBUG_LOG);
+                print_debug_message("", DEBUG_LOG);
+            }
+            else
+            {
+                print_debug_message("ISV Family ID mismatched. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* Config IDのチェック */
+        if(g_settings.req_config_id == "none")
+        {
+            print_debug_message("Skip Config ID check.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+        else
+        {
+            memcpy(quote_config_id, quote + 240, 64);
+            std::string q_config_id_hex = std::string(to_hexstring(quote_config_id, 64));
+
+            print_debug_message("Required Config ID ->", DEBUG_LOG);
+            print_debug_message(g_settings.req_config_id, DEBUG_LOG);
+            print_debug_message("Config ID from Quote ->", DEBUG_LOG);
+            print_debug_message(q_config_id_hex, DEBUG_LOG);
+
+            if(g_settings.req_config_id == q_config_id_hex)
+            {
+                print_debug_message("Config ID matched.", DEBUG_LOG);
+                print_debug_message("", DEBUG_LOG);
+            }
+            else
+            {
+                print_debug_message("Config ID mismatched. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* Config SVNのチェック */
+        print_debug_message("Required Config SVN ->", DEBUG_LOG);
+        print_debug_message(std::to_string(g_settings.min_config_svn), DEBUG_LOG);
+        print_debug_message("Config SVN from Quote ->", DEBUG_LOG);
+        print_debug_message(std::to_string(quote_config_svn), DEBUG_LOG);
+
+        if(quote_config_svn < g_settings.min_config_svn)
+        {
+            print_debug_message("Insufficient Config SVN. Reject RA.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        /* QE SVNのチェック */
+        print_debug_message("Required QE SVN ->", DEBUG_LOG);
+        print_debug_message(std::to_string(g_settings.min_qe_svn), DEBUG_LOG);
+        print_debug_message("QE SVN from Quote ->", DEBUG_LOG);
+        print_debug_message(std::to_string(quote_qe_svn), DEBUG_LOG);
+
+        if(quote_qe_svn < g_settings.min_qe_svn)
+        {
+            print_debug_message("Insufficient QE SVN. Reject RA.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        /* PCE SVNのチェック */
+        print_debug_message("Required PCE SVN ->", DEBUG_LOG);
+        print_debug_message(std::to_string(g_settings.min_pce_svn), DEBUG_LOG);
+        print_debug_message("PCE SVN from Quote ->", DEBUG_LOG);
+        print_debug_message(std::to_string(quote_pce_svn), DEBUG_LOG);
+
+        if(quote_pce_svn < g_settings.min_pce_svn)
+        {
+            print_debug_message("Insufficient PCE SVN. Reject RA.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        /* QE3 ProdIDのチェック */
+        if(g_settings.req_qe_prod_id == "none")
+        {
+            print_debug_message("Skip QE3 Prod ID check.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+        else
+        {
+            memcpy(&quote_qe_prod_id, quote + 820, 2);
+
+            print_debug_message("Required Config ID ->", DEBUG_LOG);
+            print_debug_message(g_settings.req_config_id, DEBUG_LOG);
+            print_debug_message("Config ID from Quote ->", DEBUG_LOG);
+            print_debug_message(std::to_string(quote_qe_prod_id), DEBUG_LOG);
+
+            if(g_settings.req_qe_prod_id == std::to_string(quote_qe_prod_id))
+            {
+                print_debug_message("QE3 Prod ID matched.", DEBUG_LOG);
+                print_debug_message("", DEBUG_LOG);
+            }
+            else
+            {
+                print_debug_message("QE3 Prod ID mismatched. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* QE3 MRENCLAVEのチェック */
+        if(g_settings.req_qe_mrenclave == "none")
+        {
+            print_debug_message("Skip QE3 MRENCLAVE check.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+        else
+        {
+            memcpy(quote_qe_mrenclave, quote + 628, 32);
+            std::string q_qe_mrenclave_hex = std::string(to_hexstring(quote_qe_mrenclave, 32));
+
+            print_debug_message("Required QE3 MRENCLAVE ->", DEBUG_LOG);
+            print_debug_message(g_settings.req_qe_mrenclave, DEBUG_LOG);
+            print_debug_message("QE3 MRENCLAVE from Quote ->", DEBUG_LOG);
+            print_debug_message(q_qe_mrenclave_hex, DEBUG_LOG);
+
+            if(g_settings.req_qe_mrenclave == q_qe_mrenclave_hex)
+            {
+                print_debug_message("QE3 MRENCLAVE matched.", DEBUG_LOG);
+                print_debug_message("", DEBUG_LOG);
+            }
+            else
+            {
+                print_debug_message("QE3 MRENCLAVE mismatched. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* QE3 MRSIGNERのチェック */
+        if(g_settings.req_qe_mrsigner == "none")
+        {
+            print_debug_message("Skip QE3 MRSIGNER check.", DEBUG_LOG);
+            print_debug_message("", DEBUG_LOG);
+        }
+        else
+        {
+            memcpy(quote_qe_mrsigner, quote + 692, 32);
+            std::string q_qe_mrsigner_hex = std::string(to_hexstring(quote_qe_mrsigner, 32));
+
+            print_debug_message("Required QE3 MRSIGNER ->", DEBUG_LOG);
+            print_debug_message(g_settings.req_qe_mrsigner, DEBUG_LOG);
+            print_debug_message("QE3 MRSIGNER from Quote ->", DEBUG_LOG);
+            print_debug_message(q_qe_mrsigner_hex, DEBUG_LOG);
+
+            if(g_settings.req_qe_mrsigner == q_qe_mrsigner_hex)
+            {
+                print_debug_message("QE3 MRSIGNER matched.", DEBUG_LOG);
+                print_debug_message("", DEBUG_LOG);
+            }
+            else
+            {
+                print_debug_message("QE3 MRSIGNER mismatched. Reject RA.", ERROR);
+                print_debug_message("", ERROR);
+
+                throw std::exception();
+            }
+        }
+
+        /* Report DataがGa||Gb||VKに対するハッシュ値であるかを確認する。 */
+        //VKの生成
+        aes_128bit_cmac(ra_keys.kdk, 
+        (uint8_t*)("\x01VK\x00\x80\x00"), 6, ra_keys.vk);
+
+        print_debug_binary("VK", ra_keys.vk, 16, DEBUG_LOG);
+
+        memcpy(ga_gb_vk, ra_keys.g_a, 64);
+        memcpy(&ga_gb_vk[64], ra_keys.g_b, 64);
+        memcpy(&ga_gb_vk[128], ra_keys.vk, 16);
+
+        uint8_t data_hash[32] = {0};
+        int ret = sha256_digest(ga_gb_vk, 144, data_hash);
+        
+        if(ret)
+        {
+            print_debug_message("Failed to obtain hash of ga_gb_vk.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        print_debug_binary("Derived hash of Ga||Gb||VK", 
+            data_hash, 32, DEBUG_LOG);
+        print_debug_binary("Upper 32bits of Report Data in the Quote", 
+            quote_upper_data, 32, DEBUG_LOG);
+
+        if(memcmp(data_hash, quote_upper_data, 32))
+        {
+            print_debug_message("Report Data mismatched.", ERROR);
+            print_debug_message("", ERROR);
+
+            throw std::exception();
+        }
+
+        print_debug_message("Report Data matched.", INFO);
+        print_debug_message("", INFO);
+
+        is_ra_trusted = true;
     }
     catch(...)
     {
-        //確保したヒープの解放
+        memset(ga_gb_vk, 0, 144);
+
+        free(quote_mrenclave);
+        free(quote_mrsigner);
+        free(quote_upper_data);
+        free(quote_isv_ext_prod_id);
+        free(quote_isv_family_id);
+        free(quote_config_id);
+        free(quote_qe_mrenclave);
+        free(quote_qe_mrsigner);
+        free(ga_gb_vk);
     }
 
     return is_ra_trusted;
-}
-
-
-/* サーバEnclaveの各種同一性の検証を行う */
-int verify_enclave(std::string ra_report_jwt, 
-    std::string quote_json, ra_session_t ra_keys)
-{
-    print_debug_message("==============================================", INFO);
-    print_debug_message("Verify Enclave identity", INFO);
-    print_debug_message("==============================================", INFO);
-    print_debug_message("", INFO);
-
-    std::stringstream jwt_ss(ra_report_jwt);
-    std::string line;
-
-    if(!(std::getline(jwt_ss, line, '.')
-        && std::getline(jwt_ss, line, '.')))
-    {
-        std::string error_message = "Invalid JWT format.";
-        print_debug_message(error_message, ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    size_t jwt_payload_size;
-    json::JSON jwt_obj = json::JSON::Load(
-        std::string(base64url_decode<char, char>(
-            (char*)line.c_str(), jwt_payload_size)));
-
-    json::JSON quote_json_obj = json::JSON::Load(quote_json);
-    
-    size_t quote_size;
-    uint8_t *qe3_quote = base64url_decode<uint8_t, char>(
-        (char*)quote_json_obj["quote"].ToString().c_str(), quote_size);
-
-    /* 境界外参照の抑止 */
-    if(368 + 32 > quote_size)
-    {
-        print_debug_message("Corrupted Quote structure.", ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    uint8_t *quote_mrenclave = new uint8_t[32]();
-    uint8_t *quote_mrsigner = new uint8_t[32]();
-    uint16_t quote_isvprodid = 0;
-    uint16_t quote_isvsvn = 0;
-    uint8_t *quote_upper_data = new uint8_t[32]();
-
-    //112はsgx_quote3_t内のsgx_report_data_t内までのオフセット。以下同様
-    memcpy(quote_mrenclave, qe3_quote + 112, 32);
-
-    memcpy(quote_mrsigner, qe3_quote + 176, 32);
-    memcpy(&quote_isvprodid, qe3_quote + 304, 2);
-    memcpy(&quote_isvsvn, qe3_quote + 306, 2);
-    memcpy(quote_upper_data, qe3_quote + 368, 32);
-
-    std::string q_mrenclave_hex, q_mrsigner_hex;
-
-    q_mrenclave_hex = std::string(to_hexstring(quote_mrenclave, 32));
-    q_mrsigner_hex = std::string(to_hexstring(quote_mrsigner, 32));
-
-    /* MRENCLAVEのチェック */
-    if(g_settings.skip_mrenclave_check == false)
-    {
-        print_debug_message("Required MRENCLAVE ->", DEBUG_LOG);
-        print_debug_message(g_settings.req_mrenclave, DEBUG_LOG);
-        print_debug_message("MRENCLAVE from Quote ->", DEBUG_LOG);
-        print_debug_message(q_mrenclave_hex, DEBUG_LOG);
-        
-
-        //要求値とQuote内の要素との比較
-        if(g_settings.req_mrenclave != q_mrenclave_hex)
-        {
-            print_debug_message("", ERROR);
-            print_debug_message("MRENCLAVE mismatched. Reject RA.", ERROR);
-            print_debug_message("", ERROR);
-
-            return -1;
-        }
-
-        print_debug_message("MRENCLAVE from MAA RA report ->", DEBUG_LOG);
-        print_debug_message(jwt_obj["x-ms-sgx-mrenclave"].ToString(), DEBUG_LOG);
-        print_debug_message("", DEBUG_LOG);
-
-        //要求値とRA応答エントリ内の要素との比較
-        if(g_settings.req_mrenclave != jwt_obj["x-ms-sgx-mrenclave"].ToString())
-        {
-            print_debug_message("", ERROR);
-            print_debug_message("MRENCLAVE in the RA report is corrupted.", ERROR);
-            print_debug_message("", ERROR);
-
-            return -1;
-        }
-
-        print_debug_message("MRENCLAVE matched.", INFO);
-        print_debug_message("", INFO);
-    }
-
-    /* MRSIGNERのチェック */
-    //要求値とQuote内の要素との比較
-    print_debug_message("Required MRSIGNER ->", DEBUG_LOG);
-    print_debug_message(g_settings.req_mrsigner, DEBUG_LOG);
-    print_debug_message("MRSIGNER from Quote ->", DEBUG_LOG);
-    print_debug_message(q_mrsigner_hex, DEBUG_LOG);
-
-    if(g_settings.req_mrsigner != q_mrsigner_hex)
-    {
-        print_debug_message("", ERROR);
-        print_debug_message("MRSIGNER mismatched. Reject RA.", ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    print_debug_message("MRSIGNER from MAA RA report ->", DEBUG_LOG);
-    print_debug_message(jwt_obj["x-ms-sgx-mrsigner"].ToString(), DEBUG_LOG);
-    print_debug_message("", DEBUG_LOG);
-
-    //要求値とRA応答エントリ内の要素との比較
-    if(g_settings.req_mrsigner != jwt_obj["x-ms-sgx-mrsigner"].ToString())
-    {
-        print_debug_message("", ERROR);
-        print_debug_message("MRSIGNER in the RA report is corrupted.", ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    print_debug_message("MRSIGNER matched.", INFO);
-    print_debug_message("", INFO);
-
-
-    /* ISVSVNのチェック */
-    //要求値とQuote内の要素との比較
-    print_debug_message("Required ISVSVN ->", DEBUG_LOG);
-    print_debug_message(std::to_string(g_settings.min_isv_svn), DEBUG_LOG);
-    print_debug_message("ISVSVN from Quote ->", DEBUG_LOG);
-    print_debug_message(std::to_string(quote_isvsvn), DEBUG_LOG);
-
-    if(g_settings.min_isv_svn > quote_isvsvn)
-    {
-        print_debug_message("", ERROR);
-        print_debug_message("Insufficient ISVSVN. Reject RA.", ERROR);
-        print_debug_message("", ERROR);
-    }
-
-    print_debug_message("ISVSVN from MAA RA report ->", DEBUG_LOG);
-    print_debug_message(std::to_string(jwt_obj["x-ms-sgx-svn"].ToInt()), DEBUG_LOG);
-    print_debug_message("", DEBUG_LOG);
-
-    //要求値とRA応答エントリ内の要素との比較
-    if(g_settings.min_isv_svn > jwt_obj["x-ms-sgx-svn"].ToInt())
-    {
-        print_debug_message("", ERROR);
-        print_debug_message("ISVSVN in the RA report is corrupted.", ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    print_debug_message("ISVSVN validated.", INFO);
-    print_debug_message("", INFO);
-
-
-    /* ISV ProdIDのチェック */
-    //要求値とQuote内の要素との比較
-    print_debug_message("Required ISV ProdID ->", DEBUG_LOG);
-    print_debug_message(std::to_string(g_settings.req_isv_prod_id), DEBUG_LOG);
-    print_debug_message("ISV ProdID from Quote ->", DEBUG_LOG);
-    print_debug_message(std::to_string(quote_isvsvn), DEBUG_LOG);
-
-    if(g_settings.req_isv_prod_id != quote_isvprodid)
-    {
-        print_debug_message("", ERROR);
-        print_debug_message("ISV ProdID mismatched. Reject RA.", ERROR);
-        print_debug_message("", ERROR);
-    }
-
-    print_debug_message("ISV ProdID from MAA RA report ->", DEBUG_LOG);
-    print_debug_message(std::to_string(jwt_obj["x-ms-sgx-product-id"].ToInt()), DEBUG_LOG);
-    print_debug_message("", DEBUG_LOG);
-
-    //要求値とRA応答エントリ内の要素との比較
-    if(g_settings.req_isv_prod_id != jwt_obj["x-ms-sgx-product-id"].ToInt())
-    {
-        print_debug_message("", ERROR);
-        print_debug_message("ISV ProdID in the RA report is corrupted.", ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    print_debug_message("ISV ProdID matched.", INFO);
-    print_debug_message("", INFO);
-
-
-    /* Report DataがGa||Gb||VKに対するハッシュ値であるかを確認する。
-     * MAAに送信したQuoteでこれが食い違っているとエラー400が来るため、
-     * ここではMAAのJWTエントリは検証しなくてよい。 */
-    //VKの生成
-    aes_128bit_cmac(ra_keys.kdk, 
-    (uint8_t*)("\x01VK\x00\x80\x00"), 6, ra_keys.vk);
-
-    print_debug_binary("VK", ra_keys.vk, 16, DEBUG_LOG);
-
-    uint8_t *ga_gb_vk = new uint8_t[144]();
-    memcpy(ga_gb_vk, ra_keys.g_a, 64);
-    memcpy(&ga_gb_vk[64], ra_keys.g_b, 64);
-    memcpy(&ga_gb_vk[128], ra_keys.vk, 16);
-
-    uint8_t data_hash[32] = {0};
-    int ret = sha256_digest(ga_gb_vk, 144, data_hash);
-    
-    if(ret)
-    {
-        print_debug_message("Failed to obtain hash of ga_gb_vk.", ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    print_debug_binary("Derived hash of Ga||Gb||VK", 
-        data_hash, 32, DEBUG_LOG);
-    print_debug_binary("Upper 32bits of Report Data in the Quote", 
-        quote_upper_data, 32, DEBUG_LOG);
-
-    if(memcmp(data_hash, quote_upper_data, 32))
-    {
-        print_debug_message("Report Data mismatched.", ERROR);
-        print_debug_message("", ERROR);
-
-        return -1;
-    }
-
-    print_debug_message("Report Data matched.", INFO);
-    print_debug_message("", INFO);
-
-    return 0;
-}
-
-
-/* RA reportを検証しRAの受理判断を行う */
-int process_ra_report(std::string ra_report_jwt, 
-    std::string quote_json, ra_session_t ra_keys)
-{
-    print_debug_message("==============================================", INFO);
-    print_debug_message("Verify JWT signature using JWK", INFO);
-    print_debug_message("==============================================", INFO);
-    print_debug_message("", INFO);
-
-    /* 検証用のJWKの取得 */
-    std::string url_parts = "/certs";
-    std::string jwk;
-    //int ret = get_jwk_online(g_settings.maa_url, url_parts, jwk);
-    int ret = 0; //dummy
-    if(ret) return -1;
-
-    /* JWTの署名を検証する */
-    //ret = verify_jwt(ra_report_jwt, jwk, g_settings.maa_url);
-    if(ret) return -1;
-
-    /* サーバEnclaveの各種同一性の検証を行う */
-    ret = verify_enclave(ra_report_jwt, quote_json, ra_keys);
-    if(ret) return -1;
-
-    print_debug_message("-----------------------------", INFO);
-    print_debug_message("RA Accepted.", INFO);
-    print_debug_message("-----------------------------", INFO);
-    print_debug_message("", INFO);
-
-    return 0;
 }
 
 
@@ -1604,11 +1904,6 @@ int do_RA(std::string server_url,
         sigsp, quote_u8, quote_size);
     if(ret) return -1;
 
-    /* MAAにQuoteを送信し検証する */
-    // std::string ra_report_jwt;
-    // ret = send_quote_to_maa(quote_json, ra_report_jwt);
-    // if(ret) return -1;
-
     /* QvLによりQuoteの検証を実施する */
     sgx_ql_qv_result_t quote_verification_result = TEE_QV_RESULT_UNSPECIFIED; 
     uint32_t collateral_expiration_status = 1;
@@ -1633,7 +1928,8 @@ int do_RA(std::string server_url,
     /* Quoteや補足情報の中身について各種検証処理を実施しRAの受理判断を行う */
     bool ra_result = 1; //RA Accepted
     ra_result = appraise_quote_and_supplemental_data(quote_u8, quote_size, 
-            quote_verification_result, collateral_expiration_status, supp_data);
+            quote_verification_result, collateral_expiration_status, 
+            supp_data, ra_keys);
     if(ret) ra_result = 0; //RA failed
 
     if(supp_data.p_data != NULL) free(supp_data.p_data);
@@ -1994,9 +2290,6 @@ void main_process()
         
         exit(0);
     }
-
-    print_debug_message("RETURN FOR TEST", WARN);
-    return;
 
     print_debug_binary("SK", sk, 16, DEBUG_LOG);
     print_debug_binary("MK", mk, 16, DEBUG_LOG);
