@@ -189,6 +189,50 @@ std::string load_optional_value(std::string section, std::string field, bool is_
 }
 
 
+void uint64_to_le_bytes(uint64_t v, uint8_t out[8])
+{
+    for(int i = 0; i < 8; ++i)
+        out[i] = (v >> (8 * i)) & 0xff;
+}
+
+
+/* ISV Extended Product ID及びISV Family ID用の読み込み関数 */
+std::string load_kss_isv_ids(std::string &high, std::string &low)
+{
+    uint64_t higher_int = 0;
+    uint64_t lower_int = 0;
+
+    if(((high == "none") && (low != "none")) || ((high != "none") && (low == "none")))
+    {
+        print_debug_message("Incorrect \"none\" option usage.", ERROR);
+        print_debug_message("", ERROR);
+        throw std::exception();
+    }
+    else if((high == "none" && low == "none"))
+        return "none";
+
+    try
+    {
+        higher_int = std::stoull(high, NULL, 0);
+        lower_int = std::stoull(low, NULL, 0);
+    }
+    catch(...)
+    {
+        print_debug_message("Invalid ISV ExtProd/Family ID Format in ini file.", ERROR);
+        print_debug_message("", ERROR);
+
+        throw std::exception();
+    }
+
+    uint8_t buf[16] = {0};
+
+    uint64_to_le_bytes(lower_int, buf + 0);
+    uint64_to_le_bytes(higher_int, buf + 8);
+    
+    return to_hexstring_str(buf, 16);
+}
+
+
 /* 設定情報の読み込み */
 void load_settings()
 {
@@ -230,16 +274,38 @@ void load_settings()
 
     g_settings.allowed_sa_list = load_from_ini("client", "ALLOWED_SA_LIST");
 
-    g_settings.req_isv_ext_prod_id = load_optional_value("client", "REQUIRED_ISV_EXT_PROD_ID", false);
-    g_settings.req_isv_family_id = load_optional_value("client", "REQUIRED_ISV_FAMILY_ID", false);
     g_settings.req_config_id = load_optional_value("client", "REQUIRED_CONFIG_ID", false);
     g_settings.req_qe_prod_id = load_optional_value("client", "REQUIRED_QE_PROD_ID", true);
     g_settings.req_qe_mrenclave = load_optional_value("client", "REQUIRED_QE_MRENCLAVE", false);
     g_settings.req_qe_mrsigner = load_optional_value("client", "REQUIRED_QE_MRSIGNER", false);
+
+    try
+    {
+        std::string tmp1, tmp2;
+
+        tmp1 = load_optional_value("client", "REQUIRED_ISV_EXT_PROD_ID_HIGHER", false);
+        tmp2 = load_optional_value("client", "REQUIRED_ISV_EXT_PROD_ID_LOWER", false);
+
+        g_settings.req_isv_ext_prod_id = load_kss_isv_ids(tmp1, tmp2);
+
+        tmp1 = load_optional_value("client", "REQUIRED_ISV_FAMILY_ID_HIGHER", false);
+        tmp2 = load_optional_value("client", "REQUIRED_ISV_FAMILY_ID_LOWER", false);
+
+        g_settings.req_isv_family_id = load_kss_isv_ids(tmp1, tmp2);
+    }
+    catch(...)
+    {
+        print_debug_message(
+            "Invalid setting. Probably non-integer value was set illegally,", ERROR);
+        print_debug_message("or using \"none\" option incorrectly.", ERROR);
+        print_debug_message("", ERROR);
+
+        exit(1);
+    }
 }
 
 
-/* Quote等の整数メンバ表示用関数 */
+/* Quote等のリトルエンディアン形式の整数メンバ表示用関数 */
 uint64_t read_uint_from_bin(const uint8_t *p, size_t nbytes)
 {
     uint64_t v = 0;

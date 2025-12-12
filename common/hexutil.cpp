@@ -43,6 +43,19 @@ char* to_hexstring(const uint8_t *buf, size_t size)
 }
 
 
+std::string to_hexstring_str(const uint8_t *buf, size_t size)
+{
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+
+    for (size_t i = 0; i < size; ++i)
+        oss << std::setw(2) << static_cast<int>(buf[i]);
+
+    return oss.str();
+}
+
+
+
 void print_hexstring(FILE *fp, uint8_t *source, size_t len)
 {
 	for(int i = 0; i < len; ++i)

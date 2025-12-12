@@ -210,10 +210,8 @@ sgx_status_t ecall_process_session_keys(uint32_t ra_ctx,
 sgx_status_t ecall_create_report(uint32_t ra_ctx,
     sgx_target_info_t *qe3_target_info, sgx_report_t *report)
 {
-    //鍵交換実装時はここに両者の公開鍵の連結に対するハッシュ値を同梱する
     sgx_report_data_t report_data = {0};
 
-    //ここでは例として32バイトの0の羅列を対象とする
     uint8_t *original_data = new uint8_t[144]();
     uint8_t *data_hash = new uint8_t[32]();
 
