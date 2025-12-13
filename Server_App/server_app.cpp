@@ -251,9 +251,17 @@ int initialize_enclave(sgx_enclave_id_t &eid)
     sgx_status_t status;
 
     sgx_uswitchless_config_t us_config = SGX_USWITCHLESS_CONFIG_INITIALIZER;
+    sgx_kss_config_t kss_config = {0};
+    
+    memset(kss_config.config_id, 0, SGX_CONFIGID_SIZE);
+    kss_config.config_svn = 0;
+
 	void* enclave_ex_p[32] = {0};
 
 	enclave_ex_p[SGX_CREATE_ENCLAVE_EX_SWITCHLESS_BIT_IDX] = &us_config;
+    enclave_ex_p[SGX_CREATE_ENCLAVE_EX_KSS_BIT_IDX] = &kss_config;
+
+    uint32_t ex_features = SGX_CREATE_ENCLAVE_EX_SWITCHLESS | SGX_CREATE_ENCLAVE_EX_KSS;
 
     /* 
      * Switchless Callが有効化されたEnclaveの作成。
@@ -261,7 +269,7 @@ int initialize_enclave(sgx_enclave_id_t &eid)
      * 不要かつ省略可能なのでNULLで省略している。
      */
     status = sgx_create_enclave_ex(enclave_image_name.c_str(), SGX_DEBUG_FLAG,
-                &token, &updated, &eid, NULL, SGX_CREATE_ENCLAVE_EX_SWITCHLESS, 
+                &token, &updated, &eid, NULL, ex_features, 
                     (const void**)enclave_ex_p);
 
     if(status != SGX_SUCCESS)

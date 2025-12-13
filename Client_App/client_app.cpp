@@ -1738,9 +1738,9 @@ bool appraise_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
         {
             memcpy(&quote_qe_prod_id, quote + 820, 2);
 
-            print_debug_message("Required Config ID ->", DEBUG_LOG);
-            print_debug_message(g_settings.req_config_id, DEBUG_LOG);
-            print_debug_message("Config ID from Quote ->", DEBUG_LOG);
+            print_debug_message("Required QE3 Prod ID ->", DEBUG_LOG);
+            print_debug_message(std::string(g_settings.req_qe_prod_id), DEBUG_LOG);
+            print_debug_message("QE3 Prod ID from Quote ->", DEBUG_LOG);
             print_debug_message(std::to_string(quote_qe_prod_id), DEBUG_LOG);
 
             if(g_settings.req_qe_prod_id == std::to_string(quote_qe_prod_id))
