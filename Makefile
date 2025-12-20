@@ -55,7 +55,7 @@ endif
 
 ## コンパイル時に使用するC/C++のソースを列挙
 Client_Cpp_Files := Client_App/client_app.cpp common/base64.cpp common/debug_print.cpp common/hexutil.cpp \
-				common/crypto.cpp common/jwt_util.cpp common/error_print.cpp
+				common/crypto.cpp common/error_print.cpp
 
 ## 使用するincludeファイル（ヘッダ）がある場所を列挙
 Client_Include_Paths := -IClient_App -I$(SGX_SDK)/include -Icommon -Iinclude

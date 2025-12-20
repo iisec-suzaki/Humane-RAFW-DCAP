@@ -23,7 +23,6 @@
 #include "../common/debug_print.hpp"
 #include "../common/hexutil.hpp"
 #include "../common/crypto.hpp"
-#include "../common/jwt_util.hpp"
 #include "../common/error_print.hpp"
 
 /* SGX related headers */
@@ -683,8 +682,6 @@ int get_quote(std::string server_url, std::string ra_ctx_b64,
         print_debug_message(original_data, DEBUG_LOG);
         print_debug_message("", DEBUG_LOG);
 
-        // Report DataがGa、Gb、VKの連結に対するハッシュ値と一致するかを検証する
-
         // Quoteをバイナリで抽出
         response_json = res_json_obj.dump();
 
@@ -735,7 +732,7 @@ int verify_quote(uint8_t *quote, size_t quote_size,
     quote3_error_t dcap_ret = TEE_ERROR_UNEXPECTED;
     supp_ver_t latest_ver;
     
-
+    // 補足情報（Supplemental Data）のデータとサイズを取得
     dcap_ret = tee_get_supplemental_data_version_and_size(
         quote,
         quote_size,
@@ -1550,7 +1547,7 @@ bool appraise_quote_and_supplemental_data(uint8_t *quote, size_t quote_size,
                 print_debug_message("Any of SA is allowed by user's policy.", WARN);
                 print_debug_message("", WARN);
             }
-            else if(g_settings.allowed_sa_list.length() <= 0)
+            else if(g_settings.allowed_sa_list.length() <= 0 || g_settings.allowed_sa_list == "none")
             {
                 print_debug_message("Any of SA is disallowed by user's policy. Reject RA.", ERROR);
                 print_debug_message("", ERROR);
