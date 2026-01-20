@@ -1,4 +1,5 @@
 # Humane Intel SGX Remote Attestation Framework for DCAP-RA (Humane-RAFW-DCAP)
+(日本語での説明は後半にあります/Japanese version is below)
 ## Overview
 This repository contains code and resources for an RA framework (RAFW) that enables Intel SGX DCAP-based Remote Attestation (hereinafter DCAP-RA) in its complete, officially intended form—where verification collateral is cached on a cache server called PCCS—at a “humane” level of difficulty that allows for easy implementation.
 
@@ -727,7 +728,7 @@ For reused or modified components derived from Humane-RAFW-MAA, the MIT License 
 All newly added content in this repository is also released under the MIT License.
 
 
-
+(日本語版)
 ## 概要
 本リポジトリは、Intel SGXにおけるDCAP方式(*)のRemote Attestation（以下、DCAP-RA）を、検証用付属情報（コラテラル）をPCCSというキャッシュサーバにキャッシュさせる公式想定の完全な形で、「人道的な（Humane）」難易度で手軽に実現する事ができる、RAフレームワーク（RAFW）のコードやリソースを格納しています。
 
