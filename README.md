@@ -727,6 +727,8 @@ The contents of this repository are developed by the same author based on [Human
 For reused or modified components derived from Humane-RAFW-MAA, the MIT License of Humane-RAFW-MAA is inherited.  
 All newly added content in this repository is also released under the MIT License.
 
+## Acknowledgment
+This work is supported by JST K Program Grant Number JPMJKP24U4, Japan.
 
 (日本語版)
 ## 概要
@@ -1442,3 +1444,6 @@ AzureのDCsv3マシンでは、基本的にOut-of-Procモードのみに対応�
 
 ## ライセンスについて
 本リポジトリの内容は、[Humane-RAFW-MAA](https://github.com/acompany-develop/Humane-RAFW-MAA/)をベースに、同一の開発者が開発しています。Humane-RAFW-MAA内に含まれる内容の流用・改造部分に関しては、Humane-RAFW-MAAに従いMITライセンスを継承します。また、本リポジトリで新規追加した内容についても、同様にMITライセンスで公開します。
+
+## 謝辞
+本研究は、JST経済安全保障重要技術育成プログラム【JPMJKP24U4】の支援を受けたものです。
