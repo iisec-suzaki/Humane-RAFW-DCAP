@@ -39,12 +39,15 @@ Operation has been verified on Azure, but the design allows it to run as-is on b
 * DCAP library: Version 1.23
 * OpenSSL: Version 3.0.13
 
-Windows environments are not supported.
+Windows environments are not supported.  
+For sections describing procedures performed on the Attester (SGX machine, server), use the section name [Attester]. For sections describing procedures performed on the Relying Party (RP; remote user, client) side, use the section name [RP]. This distinction need not be considered when all procedures are performed on the same machine.  
 
-### Deploying Humane-RAFW-DCAP
+Furthermore, when the RP is provided separately, it shall also serve as the Verifier.
+
+### Deploying Humane-RAFW-DCAP[Attester/RP]
 Clone this repository into an arbitrary directory. In the following explanation, it is assumed that the repository is cloned under `~/Develop/sgx/`.
 
-### Installing Linux-SGX
+### Installing Linux-SGX[Attester]
 Here, the installation procedure for Linux-SGX is explained in detail. If no explanation is required, please skip ahead to the next section.
 
 * Install prerequisite packages for SGXSDK.
@@ -159,7 +162,7 @@ Here, the installation procedure for Linux-SGX is explained in detail. If no exp
     sudo usermod -aG sgx_prv $USER
     ```
 
-### Installing the DCAP Library
+### Installing the DCAP Library[Attester/RP]
 * Clone the DCAP library.
     ``` sh
     git clone --recursive https://github.com/intel/confidential-computing.tee.dcap
@@ -224,7 +227,7 @@ Here, the installation procedure for Linux-SGX is explained in detail. If no exp
     sudo apt install libsgx-enclave-common-dev libsgx-dcap-quote-verify-dev libsgx-dcap-default-qpl-dev
     ```
 
-### Building PCCS
+### Building PCCS[RP]
 * By following the installation steps described above, `/etc/sgx_default_qcnl.conf` should already have been generated. As a precaution, back up this file to an appropriate location.
     ``` sh
     sudo cp -p /etc/sgx_default_qcnl.conf ~/Develop/sgx/
@@ -290,7 +293,108 @@ When executed, the installer will prompt for various inputs interactively. Enter
     An optional company name []:
     ```
 
-* Move to the directory containing the PCCS Admin Tool in the official DCAP library.
+#### Bare-metal Environment [Attester]
+The procedures in this section apply **only when using a bare-metal environment, not Azure**.
+
+* Install the PCK Cert ID Retrieval Tool (hereafter referred to as **PCKCIDRT**).
+    ``` sh
+    sudo apt install -y sgx-pck-id-retrieval-tool
+    ```
+
+* Run PCKCIDRT to obtain a CSV file that contains the Platform Manifest and related information.
+    ``` sh
+    cd /opt/intel/sgx-pck-id-retrieval-tool
+    sudo ./PCKIDRetrievalTool -f host_$(hostnamectl --static).csv
+    ```
+    Once this CSV is obtained, it **cannot be retrieved again until an SGX Factory Reset is performed from the BIOS settings screen**. Therefore, handle this file with great care.
+
+* Execute the following commands to extract the Platform Manifest from the CSV in binary format.
+    ``` sh
+    sudo apt-get install -y csvtool
+    sudo bash -c "csvtool col 6 host_$(hostnamectl --static).csv | xxd -r -p > host_$(hostnamectl --static)_pm.bin"
+    ```
+
+* Send the extracted Platform Manifest binary to the IRS (Intel Registration Service) to register the platform.
+    ``` sh
+    curl -i \
+    --data-binary @host_$(hostnamectl --static)_pm.bin \
+    -X POST "https://api.trustedservices.intel.com/sgx/registration/v1/platform" \
+    -H "Content-Type: application/octet-stream"
+    ```
+
+Bare-metal–specific operations end here.  
+The following sections describe procedures that apply regardless of whether the environment is bare metal or Azure.  
+Note that the steps diverge depending on whether the DCAP version is **1.24 or later**, or **1.23 or earlier**.
+
+#### DCAP Version 1.24 or Later [Attester / RP]
+* On the Attester, move to the PCS Client Tool directory within the official DCAP library.  
+  Unless explicitly stated otherwise, the following steps are performed on the Attester.
+    ``` sh
+    cd confidential-computing.tee.dcap/tools/PcsClientTool/
+    ```
+
+* If using a bare-metal environment, copy the previously obtained CSV file.
+    ``` sh
+    cp /opt/intel/sgx-pck-id-retrieval-tool/host_$(hostnamectl --static).csv .
+    ```
+
+* Install pip3.
+    ``` sh
+    sudo apt install python3-pip
+    ```
+
+* Enable a virtual environment and install prerequisite packages.
+    ``` sh
+    sudo apt install python3-venv
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install -r requirements.txt
+    ```
+
+* Using the PCS Client Tool, collect the platform list and then fetch collaterals for all FMSPCs.  
+  After execution, exit the virtual environment using the `deactivate` command.
+    ``` sh
+    ./pcsclient.py collect -d . -o platform_list.json
+    ./pcsclient.py fetch -p all -t early -o platform_collaterals.json
+    deactivate
+    ```
+    When running the `fetch` command, you will be prompted as shown below.  
+    Enter your PCS primary API key when requested.
+    ```
+    Please input ApiKey for Intel PCS:
+    Would you like to remember Intel PCS ApiKey in OS keyring? (y/n)n
+    ```
+
+* If the RP and Attester are on separate machines, transfer `platform_collaterals.json` from the Attester to the RP using `scp` or a similar method.
+
+* The following steps are performed on the RP.  
+  Return to the working directory and clone the PCCS Admin Tool repository.
+    ``` sh
+    git clone --recursive https://github.com/intel/confidential-computing.tee.dcap.pccs.git
+    ```
+
+* Enter the cloned directory, then move into the `PccsAdminTool` directory and create a virtual environment.
+    ``` sh
+    cd confidential-computing.tee.dcap.pccs/PccsAdminTool
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+
+* Use the PCCS Admin Tool to register the collected collaterals with PCCS.
+    ``` sh
+    ./pccsadmin.py put -i platform_collaterals.json
+    deactivate
+    ```
+    You will be prompted as follows.  
+    Enter the PCCS administrator password you previously configured.
+    ```
+    Please input your administrator password for PCCS service:
+    Would you like to remember password in OS keyring? (y/n)n
+    ```
+
+#### DCAP Version 1.23 or Earlier [Attester / RP]
+* On the Attester, move to the directory containing the PCCS Admin Tool within the official DCAP library.  
+  Unless explicitly stated otherwise, the following steps are performed on the Attester.
     ``` sh
     cd ~/Develop/sgx/confidential-computing.tee.dcap/tools/PccsAdminTool
     ```
@@ -300,7 +404,7 @@ When executed, the installer will prompt for various inputs interactively. Enter
     sudo apt install python3-pip
     ```
 
-* Enable venv and install prerequisite packages.
+* Enable a virtual environment and install prerequisite packages.
     ``` sh
     sudo apt install python3-venv
     python3 -m venv venv
@@ -308,34 +412,41 @@ When executed, the installer will prompt for various inputs interactively. Enter
     pip install -r requirements.txt
     ```
 
-* Using the PCCS Admin Tool, retrieve the platform list and then fetch collateral for all FMSPCs.
+* Using the PCCS Admin Tool, collect the platform list and then fetch collaterals for all FMSPCs.
     ``` sh
     ./pccsadmin.py collect -d . -o platform_list.json
     ./pccsadmin.py fetch -p all -t early -o platform_collaterals.json
     ```
-    When executing the `fetch` command, you will be prompted as follows. Enter your own PCS primary API key.
+    When running the `fetch` command, you will be prompted as shown below.  
+    Enter your PCS primary API key when requested.
     ```
     Please input ApiKey for Intel PCS:
     Would you like to remember Intel PCS ApiKey in OS keyring? (y/n)n
     ```
 
-* Using the PCCS Admin Tool, upload the collateral list obtained above (`platform_collaterals.json`) to PCCS.
+* If the RP and Attester are on separate machines, transfer `platform_collaterals.json` from the Attester to the RP using `scp` or a similar method.
+
+* The following steps are performed on the RP.  
+  Use the PCCS Admin Tool to load the previously obtained collateral list (`platform_collaterals.json`) into PCCS.
     ``` sh
-    ./pccsadmin.py put   -i platform_collaterals.json
+    ./pccsadmin.py put -i platform_collaterals.json
     ```
-    You will be prompted as follows. Enter the PCCS administrator password you specified earlier.
+    You will be prompted as follows.  
+    Enter the PCCS administrator password you previously configured.
     ```
     Please input your administrator password for PCCS service:
     Would you like to remember password in OS keyring? (y/n)n
     ```
 
-* If, in the previous steps, the PCCS Caching Fill Method was not set to LAZY, open `/opt/intel/sgx-dcap-pccs/config/default.json` and change the entry in the `CachingFillMode` field to `LAZY`.
+#### Continuation of Common Procedures for All Versions [RP / Attester]
+* If the PCCS Caching Fill Method was not set to `LAZY` in the previous steps, open  
+  `/opt/intel/sgx-dcap-pccs/config/default.json` and change the value of the `CachingFillMode` field to `LAZY`.
 
-* Finally, perform the steps following execution of the Quote generation sample in the previous section, and confirm that Quote generation and verification work correctly.
-
-* To ensure that collateral is being retrieved from PCCS rather than PCS, it is recommended to conduct RA experiments with the following configuration:
-    * Set the entry of the `collateral_service` field in `sgx_default_qcnl.conf` to the PCCS URL, i.e., `https://localhost:8081/sgx/certification/v4/`.
-    * Completely delete the local cache directory, i.e., everything under `/home/azureuser/.dcap-qcnl`.
+* To ensure that collaterals are being retrieved from **PCCS rather than PCS**, it is recommended to run Remote Attestation experiments with the following configuration:
+    * Set the `collateral_service` field in `sgx_default_qcnl.conf` to the PCCS URL, i.e.  
+      `https://localhost:8081/sgx/certification/v4/`
+    * Completely delete the local cache directory, i.e. all contents under  
+      `/home/azureuser/.dcap-qcnl/`
 
 ## Preparation
 ### Preparing CA Certificates for HTTPS Communication
@@ -730,6 +841,8 @@ All newly added content in this repository is also released under the MIT Licens
 ## Acknowledgment
 This work is supported by JST K Program Grant Number JPMJKP24U4, Japan.
 
+---
+
 (日本語版)
 ## 概要
 本リポジトリは、Intel SGXにおけるDCAP方式(*)のRemote Attestation（以下、DCAP-RA）を、検証用付属情報（コラテラル）をPCCSというキャッシュサーバにキャッシュさせる公式想定の完全な形で、「人道的な（Humane）」難易度で手軽に実現する事ができる、RAフレームワーク（RAFW）のコードやリソースを格納しています。
@@ -770,12 +883,14 @@ Azureでの動作確認を行っていますが、ベアメタルSGXマシンで
 * DCAPライブラリ: バージョン1.23
 * OpenSSL: バージョン3.0.13
 
-Windows環境には対応していません。
+Windows環境には対応していません。  
+Attester（SGXマシン、サーバ）で行う手順のセクション名には[Attester]を、Relying Party（RP; リモートユーザ、クライアント）側で行う手順のセクション名には[RP]を付与します。全て同一マシン上で実施する場合には意識する必要はありません。  
+また、RPを別途用意する場合、RPがVerifierも兼ねるものとします。
 
-### Humane-RAFW-DCAPの展開
+### Humane-RAFW-DCAPの展開[Attester/RP]
 任意のディレクトリにて、本リポジトリをクローンしてください。以下では、`~/Develop/sgx/`配下にクローンする前提で説明を進めます。
 
-### Linux-SGXのインストール
+### Linux-SGXのインストール[Attester]
 ここでは、Linux-SGXについてもインストール手順を詳細に説明します。説明不要である場合には、次のセクションまで読み飛ばしてください。
 * SGXSDKの前提パッケージをインストールする。
     ``` sh
@@ -888,7 +1003,7 @@ Windows環境には対応していません。
     sudo usermod -aG sgx $USER
     sudo usermod -aG sgx_prv $USER
 
-### DCAPライブラリのインストール
+### DCAPライブラリのインストール[Attester/RP]
 * DCAPライブラリをクローンする。
     ``` sh
     git clone --recursive https://github.com/intel/confidential-computing.tee.dcap
@@ -953,7 +1068,7 @@ Windows環境には対応していません。
     sudo apt install libsgx-enclave-common-dev libsgx-dcap-quote-verify-dev libsgx-dcap-default-qpl-dev
     ```
 
-### PCCSの構築
+### PCCSの構築[RP]
 * 上述までの導入手順により、/etc/sgx_default_qcnl.confが生成されているはずである。念の為、このファイルを適当な場所にバックアップしておく。
     ``` sh
     sudo cp -p /etc/sgx_default_qcnl.conf ~/Develop/sgx/
@@ -1019,7 +1134,100 @@ Windows環境には対応していません。
     An optional company name []:
     ```
 
-    * DCAP公式ライブラリ内の、PCCS Admin Toolのあるフォルダに移動する。
+#### ベアメタル環境の場合[Attester]
+このセクションの手順は、Azureではなくベアメタル環境である場合に実施する。
+* PCK Cert ID Retrieval Tool（以下、PCKCIDRT）をインストールする。
+    ``` sh
+    sudo apt install -y sgx-pck-id-retrieval-tool
+    ```
+
+* PCKCIDRTを実行する事で、Platform Manifest等を内包するCSVを取得する。
+    ``` sh
+    cd /opt/intel/sgx-pck-id-retrieval-tool
+    sudo ./PCKIDRetrievalTool -f host_$(hostnamectl --static).csv
+    ```
+    このCSVは、一度取得するとBIOS設定画面からSGX Factory Resetを実行するまで再取得できなくなるため、慎重に管理する事。
+
+* 以下のコマンドを実行し、CSVからPlatform Manifestをバイナリ形式で抽出する。
+    ``` sh
+    sudo apt-get install -y csvtool
+    sudo bash -c "csvtool col 6 host_$(hostnamectl --static).csv | xxd -r -p > host_$(hostnamectl --static)_pm.bin"
+    ```
+
+* 抽出したPlatform Manifestのバイナリを、IRS（Intel Registration Service）に送信し、プラットフォーム登録を実施する。
+    ``` sh
+    curl -i \
+    --data-binary @host_$(hostnamectl --static)_pm.bin \
+    -X POST "https://api.trustedservices.intel.com/sgx/registration/v1/platform" \
+    -H "Content-Type: application/octet-stream"
+    ```
+
+ベアメタル環境固有の操作は上記で終了。  
+以下、ベアメタルやAzure等問わず実行する処理の説明に戻るが、DCAPバージョンが1.24以上であるか否かで手順が分かれる。
+
+#### DCAPバージョンが1.24以上の場合[Attester/RP]
+* Attesterにて、DCAP公式ライブラリ内の、PCS Client Toolのフォルダに移動する。以下、明記があるまでAttesterでの手順。
+    ``` sh
+    cd confidential-computing.tee.dcap/tools/PcsClientTool/
+    ```
+
+* ベアメタル環境である場合、先程取得したCSVをコピーしてくる。
+    ``` sh
+    cp /opt/intel/sgx-pck-id-retrieval-tool/host_$(hostnamectl --static).csv .
+    ```
+
+* pip3をインストールする。
+    ``` sh
+    sudo apt install python3-pip
+    ```
+
+* venvを有効化し、前提パッケージをインストールする。
+    ``` sh
+    sudo apt install python3-venv
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install -r requirements.txt
+    ```
+
+* PCS Client Toolにより、プラットフォームリストの取得を行い、そして全てのFMSPCに対するコラテラルを取得する。実行後はdeactivateコマンドによりvenv環境を抜けておく。
+    ``` sh
+    ./pcsclient.py collect -d . -o platform_list.json
+    ./pcsclient.py fetch -p all -t early -o platform_collaterals.json
+    deactivate
+    ```
+    fetchの方を実行すると以下のように聞かれるため、以下のように入力する。APIキーには自身のPCSプライマリキーを入力する。
+    ```
+    Please input ApiKey for Intel PCS:
+    Would you like to remember Intel PCS ApiKey in OS keyring? (y/n)n
+    ```
+
+* RPとAttesterが別々のマシンである場合、上記`platform_collaterals.json`を、AttesterからRPに`scp`等で転送しておく。
+
+* 以下、RPでの手順。作業フォルダに戻り、PCCS Admin ToolをCloneする。
+    ``` sh
+    git clone --recursive https://github.com/intel/confidential-computing.tee.dcap.pccs.git
+    ```
+
+* Cloneしたフォルダに入り、さらにその中のPccsAdminToolフォルダに入り、venv環境を生成する。
+    ``` sh
+    cd confidential-computing.tee.dcap.pccs/PccsAdminTool
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+
+* PCCS Admin Toolにより、収集したコラテラルをPCCSに登録する。
+    ``` sh
+    ./pccsadmin.py put -i platform_collaterals.json
+    deactivate
+    ```
+    実行すると以下のように聞かれるため、以下のように入力する。PCCS管理者パスワードは先程決めたものを入力する。
+    ```
+    Please input your administrator password for PCCS service:
+    Would you like to remember password in OS keyring? (y/n)n
+    ```
+
+#### DCAPバージョンが1.23以下の場合[Attester/RP]
+* Attesterにて、DCAP公式ライブラリ内の、PCCS Admin Toolのあるフォルダに移動する。以下、明記があるまでAttesterでの手順。
     ``` sh
     cd ~/Develop/sgx/confidential-computing.tee.dcap/tools/PccsAdminTool
     ```
@@ -1048,7 +1256,9 @@ Windows環境には対応していません。
     Would you like to remember Intel PCS ApiKey in OS keyring? (y/n)n
     ```
 
-* 上記で取得したコラテラルのリスト（`platform_collaterals.json`）を、PCCS Admin Toolを用いてPCCSに投入する。
+* RPとAttesterが別々のマシンである場合、上記`platform_collaterals.json`を、AttesterからRPに`scp`等で転送しておく。
+
+* 以下、RPでの手順。上記で取得したコラテラルのリスト（`platform_collaterals.json`）を、PCCS Admin Toolを用いてPCCSに投入する。
     ``` sh
     ./pccsadmin.py put   -i platform_collaterals.json
     ```
@@ -1058,9 +1268,8 @@ Windows環境には対応していません。
     Would you like to remember password in OS keyring? (y/n)n
     ```
 
+#### 全バージョン共通手順の続き[RP/Attester]
 * もし前の手順において、PCCSのCaching Fill MethodをLAZYにしていない場合は、`/opt/intel/sgx-dcap-pccs/config/default.json`を開き、`CachingFillMode`フィールドのエントリを`LAZY`に変更する。
-
-* 後は、前節のQuote生成サンプルの実行以降の手順を実施し、Quoteの生成及び検証ができる事を確認する。
 
 * 確実にPCSではなくPCCSのコラテラルが来ている事を確かめるには、以下の構成にしてRAの実験をすると良い。
     * `sgx_default_qcnl.conf`の`collateral_service`フィールドのエントリを、PCCSのURL、つまり`https://localhost:8081/sgx/certification/v4/`にする。
