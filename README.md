@@ -233,9 +233,9 @@ Here, the installation procedure for Linux-SGX is explained in detail. If no exp
     sudo cp -p /etc/sgx_default_qcnl.conf ~/Develop/sgx/
     ```
 
-* Overwrite `/etc/sgx_default_qcnl.conf` with `sgx_default_qcnl.conf.pccs` bundled with this repository.
+* Overwrite `/etc/sgx_default_qcnl.conf` with `sgx_default_qcnl.conf` bundled with this repository.
     ``` sh
-    sudo cp sgx_default_qcnl.conf.pccs /etc/sgx_default_qcnl.conf
+    sudo cp sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
     ```
     As a precaution, also check the owner and permissions of `sgx_default_qcnl.conf`. In a verified environment, they are as follows:
     ``` sh
@@ -1074,9 +1074,9 @@ Attester（SGXマシン、サーバ）で行う手順のセクション名には
     sudo cp -p /etc/sgx_default_qcnl.conf ~/Develop/sgx/
     ```
 
-* このリポジトリに同梱している `sgx_default_qcnl.conf.pccs` で、 `/etc/sgx_default_qcnl.conf` を上書きする。
+* このリポジトリに同梱している `sgx_default_qcnl.conf` で、 `/etc/sgx_default_qcnl.conf` を上書きする。
     ``` sh
-    sudo cp sgx_default_qcnl.conf.pccs /etc/sgx_default_qcnl.conf
+    sudo cp sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
     ```  
     念の為、sgx_default_qcnl.confのオーナーや権限についても注意しておく。動作確認済みの環境では以下のようになっている：  
     ``` sh
