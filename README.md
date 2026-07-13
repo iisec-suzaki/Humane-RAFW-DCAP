@@ -35,8 +35,8 @@ Operation has been verified on Azure, but the design allows it to run as-is on b
 * OS: Ubuntu 24.04.3 LTS
 * Azure instance: Standard DC4ds v3 (DCsv3/DCdsv3 series)
 * Linux kernel: 6.14.0-1014-azure
-* SGXSDK: Version 2.26
-* DCAP library: Version 1.23
+* SGXSDK: Version 2.29
+* DCAP library: Version 1.26
 * OpenSSL: Version 3.0.13
 
 Windows environments are not supported.  
@@ -85,7 +85,7 @@ Here, the installation procedure for Linux-SGX is explained in detail. If no exp
     pushd linux/installer/bin
     sudo ./sgx_linux_x64_sdk_${version}.bin
     ```
-    In the case of Linux-SGX 2.26, the installer file name is `sgx_linux_x64_sdk_2.26.100.0.bin`.
+    In the case of Linux-SGX 2.29, the installer file name is `sgx_linux_x64_sdk_2.29.100.1.bin`.
 
     In this setup, the SDK is installed under `/opt/intel`. When prompted as follows, enter `no` and press Enter.
     ``` sh
@@ -879,8 +879,8 @@ Azureでの動作確認を行っていますが、ベアメタルSGXマシンで
 * OS: Ubuntu 24.04.3 LTS
 * Azureインスタンス: Standard DC4ds v3（DCsv3/DCdsv3シリーズ）
 * Linuxカーネル: 6.14.0-1014-azure
-* SGXSDK: バージョン2.26
-* DCAPライブラリ: バージョン1.23
+* SGXSDK: バージョン2.29
+* DCAPライブラリ: バージョン1.26
 * OpenSSL: バージョン3.0.13
 
 Windows環境には対応していません。  
@@ -927,7 +927,7 @@ Attester（SGXマシン、サーバ）で行う手順のセクション名には
     pushd linux/installer/bin
     sudo ./sgx_linux_x64_sdk_${version}.bin
     ```
-    Linux-SGX 2.26の場合、インストーラのファイル名は`sgx_linux_x64_sdk_2.26.100.0.bin`である。  
+    Linux-SGX 2.29の場合、インストーラのファイル名は`sgx_linux_x64_sdk_2.29.100.1.bin`である。  
 
     今回は、`/opt/intel`にインストールする。以下のように聞かれるので、`no`と入力しEnterする。  
     ``` sh

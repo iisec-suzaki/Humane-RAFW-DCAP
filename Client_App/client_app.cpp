@@ -26,7 +26,6 @@
 #include "../common/error_print.hpp"
 
 /* SGX related headers */
-#include <sgx_uae_launch.h>
 #include <sgx_urts.h>
 #include "sgx_ql_quote.h"
 #include "sgx_dcap_quoteverify.h"

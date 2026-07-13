@@ -1,4 +1,4 @@
-#include <sgx_tkey_exchange.h>
+#include <sgx_tcrypto.h>
 
 /* 署名・検証で使用するSPの256bit ECDSA公開鍵。
  * RAによるTLS確立前に改竄や中間者攻撃などが実行されるのを防ぐため、
