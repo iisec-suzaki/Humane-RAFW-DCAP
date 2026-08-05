@@ -8,7 +8,6 @@
 #include <sgx_urts.h>
 #include <sgx_tcrypto.h>
 #include <sgx_uswitchless.h>
-#include <sgx_ukey_exchange.h>
 #include <sgx_dcap_ql_wrapper.h>
 #include <sgx_pce.h>
 #include <sgx_quote_3.h>

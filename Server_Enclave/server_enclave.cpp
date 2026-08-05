@@ -264,7 +264,7 @@ sgx_status_t ecall_sample_addition(uint32_t ra_ctx,
     uint8_t *iv_result, uint8_t *tag_result)
 {
     sgx_status_t status = SGX_SUCCESS;
-    sgx_ra_key_128_t sk_key, mk_key;
+    sgx_aes_gcm_128bit_key_t sk_key, mk_key;
 
     memcpy(&sk_key, g_ra_sessions[ra_ctx].sk, 16);
     memcpy(&mk_key, g_ra_sessions[ra_ctx].mk, 16);

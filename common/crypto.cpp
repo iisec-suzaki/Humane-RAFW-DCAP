@@ -128,9 +128,8 @@ int evp_pubkey_to_sgx_ec256(client_sgx_ec256_public_t *sgx_pubkey, EVP_PKEY *pke
 
     uint8_t pkey_gx[SGX_ECP256_KEY_SIZE];  // SP公開鍵のx成分
     uint8_t pkey_gy[SGX_ECP256_KEY_SIZE];  // SP公開鍵のy成分
-    // SGX_ECP256_KEY_SIZEはsgx_key_exchange.hがincludeしている
-    // sgx_tcrypto.hにて定義されている。デフォルトで32。
-
+    // SGX_ECP256_KEY_SIZEはSGXSDKのsgx_tcrypto.hにて定義されている。
+    // デフォルトで32。
     /* 先頭1バイト(メタデータ)を除去しx, y成分を抽出 */
     for (int i = 0; i < SGX_ECP256_KEY_SIZE; i++)
     {
